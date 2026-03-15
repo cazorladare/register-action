@@ -2,18 +2,18 @@ name: Daily Task Job
 
 on:
   schedule:
-    - cron: '*/40 * * * *' #每40分钟跑一次
+    - cron: '0 */2 * * *' #每40分钟跑一次
   workflow_dispatch:
     inputs:
       count:
         description: '本次手动运行注册数量'
         required: false
-        default: '40'
+        default: '10'
 
 jobs:
   register:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -30,19 +30,20 @@ jobs:
 
       - name: Run registration
         env:
-          REG_COUNT: ${{ github.event.inputs.count || '40' }} #自动运行每次注册数量
+          REG_COUNT: ${{ github.event.inputs.count || '10' }} # 自动运行时每次注册 10 个
         run: |
           mkdir -p codex
           for i in $(seq 1 $REG_COUNT); do
             echo "========== 第 $i/$REG_COUNT 次注册 =========="
             python task_runner.py --once || true
             if [ "$i" -lt "$REG_COUNT" ]; then
-              SLEEP=$((RANDOM % 20 + 10))
-              echo "[*] 等待 ${SLEEP}s..."
+              # 改为：随机等待 60 到 180 秒 (1~3分钟)，大幅降低频率
+              SLEEP=$((RANDOM % 120 + 60))
+              echo "[*] 为避免风控，等待 ${SLEEP}s..."
               sleep $SLEEP
             fi
           done
-
+          
       - name: Upload tokens
         if: always()
         uses: actions/upload-artifact@v4
