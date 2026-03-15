@@ -621,12 +621,16 @@ def main() -> None:
                 except Exception:
                     fname_email = "unknown"
 
+                # 适配 GitHub Actions：在此处指定保存到 codex 文件夹
+                save_dir = "codex"
+                os.makedirs(save_dir, exist_ok=True)
                 file_name = f"token_{fname_email}_{int(time.time())}.json"
+                file_path = os.path.join(save_dir, file_name)
 
-                with open(file_name, "w", encoding="utf-8") as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     f.write(token_json)
 
-                print(f"[*] 成功! Token 已保存至: {file_name}")
+                print(f"[*] 成功! Token 已保存至: {file_path}")
             else:
                 print("[-] 本次注册失败。")
 
