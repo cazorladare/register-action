@@ -2,7 +2,7 @@ name: Daily Task Job
 
 on:
   schedule:
-    - cron: '0 */2 * * *' #每40分钟跑一次
+    - cron: '17 */2 * * *' #每2小时17分钟跑一次
   workflow_dispatch:
     inputs:
       count:
