@@ -2,18 +2,20 @@ name: Daily Task Job
 
 on:
   schedule:
-    - cron: '17 */2 * * *' #每2小时17分钟跑一次
+    # 策略 1：修改了 Cron。现在是每 1 小时的第 47 分钟运行，更加散列。
+    - cron: '47 1-23/1 * * *' 
   workflow_dispatch:
     inputs:
       count:
         description: '本次手动运行注册数量'
         required: false
-        default: '30'
+        default: '20'
 
 jobs:
   register:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 策略 2：为了配合随机延迟，将超时时间从 60 增加到 90 分钟，防止任务被 GitHub 强杀。
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -28,17 +30,26 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 策略 3：在真正开始注册前，增加一个完全独立的随机等待步骤
+      - name: Random Start Delay
+        run: |
+          # 随机生成 0 到 899 秒之间的数值 (约 15 分钟内)
+          DELAY=$((RANDOM % 900))
+          echo "🤖 为了扰乱风控指纹，本轮任务将随机延迟 $DELAY 秒后启动..."
+          echo "⏳ 等待时间约为 $((DELAY / 60)) 分 $((DELAY % 60)) 秒"
+          sleep $DELAY
+
       - name: Run registration
         env:
-          REG_COUNT: ${{ github.event.inputs.count || '30' }} # 自动运行时每次注册 10 个
+          REG_COUNT: ${{ github.event.inputs.count || '30' }} # 自动运行时每次注册 30 个
         run: |
           mkdir -p codex
           for i in $(seq 1 $REG_COUNT); do
             echo "========== 第 $i/$REG_COUNT 次注册 =========="
             python task_runner.py --once || true
             if [ "$i" -lt "$REG_COUNT" ]; then
-              # 改为：随机等待 20 到 50 秒 (1~3分钟)，大幅降低频率
-              SLEEP=$((RANDOM % 30 + 20))
+              # 改为：随机等待 20 到 50 秒，降低频率
+              SLEEP=$((RANDOM % 20 + 30))
               echo "[*] 为避免风控，等待 ${SLEEP}s..."
               sleep $SLEEP
             fi
