@@ -26,34 +26,88 @@ from curl_cffi import requests
 # CF临时邮箱 API (v2)/叫我小杨同学 Linuxdo
 # ==========================================
 
-# 替换为你的域名
-TEMPMAIL_BASE = "https://mail.sqvip.info"
-TEMPMAIL_DOMAIN = "sqvip.info"
-# 如果设置了全局访问密码，填这里；没设置留空
-CUSTOM_AUTH = ""
+# CFMail 配置（mail.sqvip.top 多域名随机轮询）
+TEMPMAIL_BASE = "https://mail.sqvip.top"
+CUSTOM_AUTH = ""        # 全局访问密码（x-custom-auth），没设置留空
+USER_EMAIL = "Test"     # 用户登录邮箱
+USER_PASSWORD = "asdfghjkl"  # 用户登录密码（明文，会自动 SHA256）
+CFMAIL_DOMAINS = [
+    "sqvip.info",
+    "sqvip.sbs",
+    "sqmail.sbs",
+    "sqlive.sbs",
+    "sqclub.sbs",
+    "sqvip.cc.cd",
+    "smails.us.ci",
+    "nicemail.cc.cd",
+    "sqmail.cc.cd",
+    "sqmail.us.ci",
+    "xpmail.cc.cd",
+    "xpmail.us.ci",
+    "abmail.cc.cd",
+    "abmail.us.ci",
+]
 
 
-def get_email_and_token(proxies: Any = None) -> tuple[str, str]:
-    """创建临时邮箱并获取 JWT token"""
+def login_user(proxies: Any = None) -> str:
+    """登录用户并获取 user JWT token"""
     try:
         headers = {"Content-Type": "application/json"}
         if CUSTOM_AUTH:
             headers["x-custom-auth"] = CUSTOM_AUTH
 
+        resp = requests.post(
+            f"{TEMPMAIL_BASE}/user_api/login",
+            headers=headers,
+            json={
+                "email": USER_EMAIL,
+                "password": hashlib.sha256(USER_PASSWORD.encode("utf-8")).hexdigest(),
+            },
+            proxies=proxies,
+            timeout=15,
+        )
+
+        if resp.status_code != 200:
+            print(f"[Error] 用户登录失败，状态码: {resp.status_code}，响应: {resp.text}")
+            return ""
+
+        data = resp.json()
+        user_token = data.get("jwt", "").strip()
+
+        if not user_token:
+            print("[Error] 用户登录成功，但未返回 JWT")
+            return ""
+
+        return user_token
+
+    except Exception as e:
+        print(f"[Error] 用户登录出错: {e}")
+        return ""
+
+
+def get_email_and_token(user_token: str, proxies: Any = None) -> tuple[str, str]:
+    """创建临时邮箱并获取 JWT token"""
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "x-user-token": user_token,
+        }
+        if CUSTOM_AUTH:
+            headers["x-custom-auth"] = CUSTOM_AUTH
+
         # 生成 10 位随机小写字母作为邮箱前缀，看起来更像真实用户
         random_name = "".join(random.choices(string.ascii_lowercase, k=10))
-        
+
         resp = requests.post(
             f"{TEMPMAIL_BASE}/api/new_address",
             headers=headers,
-            # 将 name 替换为生成的随机字母
-            json={"name": random_name, "domain": TEMPMAIL_DOMAIN},
+            json={"name": random_name, "domain": random.choice(CFMAIL_DOMAINS)},
             proxies=proxies,
             timeout=15,
         )
 
         if resp.status_code not in (200, 201):
-            print(f"[Error] 创建邮箱失败，状态码: {resp.status_code}")
+            print(f"[Error] 创建邮箱失败，状态码: {resp.status_code}，响应: {resp.text}")
             return "", ""
 
         data = resp.json()
@@ -445,7 +499,11 @@ def run(proxy: Optional[str]) -> Optional[str]:
         print(f"[Error] 网络连接检查失败: {e}")
         return None
 
-    email, dev_token = get_email_and_token(proxies)
+    user_token = login_user(proxies)
+    if not user_token:
+        return None
+
+    email, dev_token = get_email_and_token(user_token, proxies)
     if not email or not dev_token:
         return None
     print(f"[*] 成功获取 CF 临时邮箱与授权: {email}")
@@ -638,7 +696,7 @@ def run(proxy: Optional[str]) -> Optional[str]:
             },
             data=login_body,
         )
-        print(f"[OAuth] authorize/continue -> {cont_resp.status_code}")
+        print(f"[OAuth] 账号识别 -> {cont_resp.status_code}")
         if cont_resp.status_code != 200:
             print(f"[Error] OAuth authorize/continue 失败: {cont_resp.text[:200]}")
             return None
@@ -674,7 +732,7 @@ def run(proxy: Optional[str]) -> Optional[str]:
             },
             json={"password": password},
         )
-        print(f"[OAuth] password/verify -> {verify_resp.status_code}")
+        print(f"[OAuth] 密码验证 -> {verify_resp.status_code}")
         if verify_resp.status_code != 200:
             print(f"[Error] OAuth 密码验证失败: {verify_resp.text[:200]}")
             return None
@@ -682,7 +740,7 @@ def run(proxy: Optional[str]) -> Optional[str]:
         verify_data = verify_resp.json()
         continue_url = verify_data.get("continue_url", "")
         page_type = (verify_data.get("page") or {}).get("type", "")
-        print(f"[OAuth] verify page={page_type or '-'} continue_url={continue_url[:120] if continue_url else '(空)'}")
+        print(f"[OAuth] 验证页类型={page_type or '-'}")
         if not continue_url:
             print("[Error] OAuth 未获取到 continue_url")
             return None
@@ -705,7 +763,7 @@ def run(proxy: Optional[str]) -> Optional[str]:
                 },
                 json={"code": login_otp},
             )
-            print(f"[OAuth] login otp validate -> {otp_resp2.status_code}")
+            print(f"[OAuth] 登录OTP验证 -> {otp_resp2.status_code}")
             if otp_resp2.status_code != 200:
                 print(f"[Error] OAuth OTP 验证失败: {otp_resp2.text[:200]}")
                 return None
@@ -750,7 +808,7 @@ def run(proxy: Optional[str]) -> Optional[str]:
                 },
                 data=select_body2,
             )
-            print(f"[OAuth] workspace/select -> {select_resp2.status_code}")
+            print(f"[OAuth] 工作区选择 -> {select_resp2.status_code}")
             if select_resp2.status_code != 200:
                 print(f"[Error] workspace/select 失败: {select_resp2.text[:200]}")
                 return None
