@@ -16,6 +16,19 @@ jobs:
     runs-on: ubuntu-latest
     # 策略 2：为了配合随机延迟，将超时时间从 60 增加到 90 分钟，防止任务被 GitHub 强杀。
     timeout-minutes: 90
+    env:
+      # 建议在仓库 Settings -> Secrets and variables -> Actions 中配置：
+      # Secrets:
+      #   CFMAIL_USER_EMAIL / CFMAIL_USER_PASSWORD / CFMAIL_CUSTOM_AUTH(可选)
+      # Variables:
+      #   CFMAIL_BASE(可选) / CFMAIL_DOMAINS(可选，支持 JSON 数组或逗号分隔字符串)
+      #   TEMPMAIL_LOL_BASE(可选，task_runner_tempmail.py 使用)
+      CFMAIL_BASE: ${{ vars.CFMAIL_BASE }}
+      CFMAIL_DOMAINS: ${{ vars.CFMAIL_DOMAINS }}
+      TEMPMAIL_LOL_BASE: ${{ vars.TEMPMAIL_LOL_BASE }}
+      CFMAIL_CUSTOM_AUTH: ${{ secrets.CFMAIL_CUSTOM_AUTH }}
+      CFMAIL_USER_EMAIL: ${{ secrets.CFMAIL_USER_EMAIL }}
+      CFMAIL_USER_PASSWORD: ${{ secrets.CFMAIL_USER_PASSWORD }}
 
     steps:
       - name: Checkout
