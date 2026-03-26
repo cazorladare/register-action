@@ -26,12 +26,17 @@ from curl_cffi import requests
 # CF临时邮箱 API (v2)/叫我小杨同学 Linuxdo
 # ==========================================
 
-# CFMail 配置（mail.sqvip.top 多域名随机轮询）
-TEMPMAIL_BASE = "https://mail.sqvip.top"
-CUSTOM_AUTH = ""        # 全局访问密码（x-custom-auth），没设置留空
-USER_EMAIL = "Test"     # 用户登录邮箱
-USER_PASSWORD = "asdfghjkl"  # 用户登录密码（明文，会自动 SHA256）
-CFMAIL_DOMAINS = [
+# GitHub Actions 配置建议：
+#   Secrets:
+#     - CFMAIL_USER_EMAIL
+#     - CFMAIL_USER_PASSWORD
+#     - CFMAIL_CUSTOM_AUTH   (可选)
+#   Variables:
+#     - CFMAIL_BASE          (可选)
+#     - CFMAIL_DOMAINS       (可选，支持 JSON 数组 / 逗号分隔 / 换行分隔)
+
+DEFAULT_CFMAIL_BASE = "https://mail.sqvip.top"
+DEFAULT_CFMAIL_DOMAINS = [
     "sqvip.info",
     "sqvip.sbs",
     "sqmail.sbs",
@@ -49,9 +54,62 @@ CFMAIL_DOMAINS = [
 ]
 
 
+def _env(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip()
+
+
+def _load_cfmail_domains() -> list[str]:
+    raw = _env("CFMAIL_DOMAINS")
+    if not raw:
+        return DEFAULT_CFMAIL_DOMAINS.copy()
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            domains = [str(item).strip() for item in parsed if str(item).strip()]
+            if domains:
+                return domains
+    except json.JSONDecodeError:
+        pass
+
+    domains = [item.strip() for item in re.split(r"[\r\n,]+", raw) if item.strip()]
+    return domains or DEFAULT_CFMAIL_DOMAINS.copy()
+
+
+TEMPMAIL_BASE = _env("CFMAIL_BASE", DEFAULT_CFMAIL_BASE)
+CUSTOM_AUTH = _env("CFMAIL_CUSTOM_AUTH")        # 全局访问密码（x-custom-auth），可留空
+USER_EMAIL = _env("CFMAIL_USER_EMAIL")          # GitHub Secret
+USER_PASSWORD = _env("CFMAIL_USER_PASSWORD")    # GitHub Secret（明文，会自动 SHA256）
+CFMAIL_DOMAINS = _load_cfmail_domains()
+
+
+def validate_mail_config() -> None:
+    missing = []
+    if not TEMPMAIL_BASE:
+        missing.append("CFMAIL_BASE")
+    if not USER_EMAIL:
+        missing.append("CFMAIL_USER_EMAIL")
+    if not USER_PASSWORD:
+        missing.append("CFMAIL_USER_PASSWORD")
+    if not CFMAIL_DOMAINS:
+        missing.append("CFMAIL_DOMAINS")
+
+    if missing:
+        raise RuntimeError(
+            "缺少邮箱相关 GitHub 配置: "
+            + ", ".join(missing)
+            + "。请在仓库 Settings -> Secrets and variables -> Actions 中设置。"
+        )
+
+
 def login_user(proxies: Any = None) -> str:
     """登录用户并获取 user JWT token"""
     try:
+        validate_mail_config()
+
         headers = {"Content-Type": "application/json"}
         if CUSTOM_AUTH:
             headers["x-custom-auth"] = CUSTOM_AUTH
@@ -849,6 +907,12 @@ def main() -> None:
 
     sleep_min = max(1, args.sleep_min)
     sleep_max = max(sleep_min, args.sleep_max)
+
+    try:
+        validate_mail_config()
+    except Exception as e:
+        print(f"[ConfigError] {e}")
+        sys.exit(1)
 
     count = 0
     print("[Info] Yasal's Seamless OpenAI Auto-Registrar Started for ZJH (CF Tempmail Edition)")
