@@ -56,7 +56,7 @@ DEFAULT_CFMAIL_DOMAINS = [
 
 def _env(name: str, default: str = "") -> str:
     value = os.getenv(name)
-    if value is None:
+    if not value or not value.strip():
         return default
     return value.strip()
 
