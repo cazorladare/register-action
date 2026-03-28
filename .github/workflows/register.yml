@@ -141,27 +141,9 @@ jobs:
           fi
 
           if [ -n "${ZIP_PATH:-}" ] && [ -f "${ZIP_PATH}" ] && [ "${JSON_COUNT:-0}" -gt 0 ]; then
-            CAPTION=$(cat <<EOF
-📦 UTC+8 ${TARGET_DATE} 全量打包
-JSON 数量: ${JSON_COUNT}
-来源 artifacts: ${ARTIFACT_COUNT}
-时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}
-EOF
-)
-            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
-              -F "chat_id=${TG_CHAT_ID}" \
-              -F "document=@${ZIP_PATH}" \
-              -F "caption=${CAPTION}"
+            CAPTION=$(printf '%s\n'               "📦 UTC+8 ${TARGET_DATE} 全量打包"               "JSON 数量: ${JSON_COUNT}"               "来源 artifacts: ${ARTIFACT_COUNT}"               "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}")
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"               -F "chat_id=${TG_CHAT_ID}"               -F "document=@${ZIP_PATH}"               -F "caption=${CAPTION}"
           else
-            MSG=$(cat <<EOF
-📦 Daily bundle
-日期(UTC+8): ${TARGET_DATE}
-结果: 无可打包产物
-来源 artifacts: ${ARTIFACT_COUNT}
-时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}
-EOF
-)
-            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-              --data-urlencode "chat_id=${TG_CHAT_ID}" \
-              --data-urlencode "text=${MSG}"
+            MSG=$(printf '%s\n'               "📦 Daily bundle"               "日期(UTC+8): ${TARGET_DATE}"               "结果: 无可打包产物"               "来源 artifacts: ${ARTIFACT_COUNT}"               "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}")
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage"               --data-urlencode "chat_id=${TG_CHAT_ID}"               --data-urlencode "text=${MSG}"
           fi
