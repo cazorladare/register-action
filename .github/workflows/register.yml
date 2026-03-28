@@ -1,28 +1,40 @@
-name: Daily Task Job
+name: Register and Daily Summary
 
 on:
   schedule:
-    # 策略 1：修改了 Cron。现在是每 1 小时的第 47 分钟运行，更加散列。
-    - cron: '47 1-23/1 * * *' 
+    - cron: '47 */2 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
+      mode:
+        description: '执行模式'
+        required: true
+        default: 'register'
+        type: choice
+        options:
+          - register
+          - daily_summary
       count:
-        description: '本次手动运行注册数量'
+        description: 'register 模式下的注册数量'
         required: false
         default: '20'
+      summary_date:
+        description: 'daily_summary 模式下要打包的 UTC+8 日期，格式 YYYY-MM-DD；留空则默认前一天'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   register:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '47 */2 * * *') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'register')
     runs-on: ubuntu-latest
-    # 策略 2：为了配合随机延迟，将超时时间从 60 增加到 90 分钟，防止任务被 GitHub 强杀。
     timeout-minutes: 90
     env:
-      # 建议在仓库 Settings -> Secrets and variables -> Actions 中配置：
-      # Secrets:
-      #   CFMAIL_USER_EMAIL / CFMAIL_USER_PASSWORD / CFMAIL_CUSTOM_AUTH(可选)
-      # Variables:
-      #   CFMAIL_BASE(可选) / CFMAIL_DOMAINS(可选，支持 JSON 数组或逗号分隔字符串)
-      #   TEMPMAIL_LOL_BASE(可选，task_runner_tempmail.py 使用)
       CFMAIL_BASE: ${{ vars.CFMAIL_BASE }}
       CFMAIL_DOMAINS: ${{ vars.CFMAIL_DOMAINS }}
       TEMPMAIL_LOL_BASE: ${{ vars.TEMPMAIL_LOL_BASE }}
@@ -43,66 +55,113 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # 策略 3：在真正开始注册前，增加一个完全独立的随机等待步骤
       - name: Random Start Delay
         run: |
-          # 随机生成 0 到 899 秒之间的数值 (约 15 分钟内)
           DELAY=$((RANDOM % 900))
-          echo "🤖 为了扰乱风控指纹，本轮任务将随机延迟 $DELAY 秒后启动..."
+          echo "🤖 本轮任务随机延迟 $DELAY 秒后启动..."
           echo "⏳ 等待时间约为 $((DELAY / 60)) 分 $((DELAY % 60)) 秒"
-          sleep $DELAY
+          sleep "$DELAY"
 
       - name: Run registration
         env:
-          REG_COUNT: ${{ github.event.inputs.count || '30' }} # 自动运行时每次注册 30 个
+          REG_COUNT: ${{ github.event.inputs.count || '30' }}
         run: |
           mkdir -p codex
-          for i in $(seq 1 $REG_COUNT); do
+          for i in $(seq 1 "$REG_COUNT"); do
             echo "========== 第 $i/$REG_COUNT 次注册 =========="
-            python task_runner.py --once || true
+            python scripts/task_runner.py --once || true
             if [ "$i" -lt "$REG_COUNT" ]; then
-              # 改为：随机等待 20 到 50 秒，降低频率
               SLEEP=$((RANDOM % 20 + 30))
               echo "[*] 为避免风控，等待 ${SLEEP}s..."
-              sleep $SLEEP
+              sleep "$SLEEP"
             fi
           done
-          
-      - name: Upload tokens
+
+      - name: Upload tokens artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tokens-${{ github.run_number }}-${{ github.run_attempt }}
           path: codex/
-          retention-days: 7
+          retention-days: 14
           if-no-files-found: ignore
 
-      - name: Notify Telegram
-        if: always()
+  daily_summary:
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 4 * * *') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'daily_summary')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build previous-day bundle
+        id: bundle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SUMMARY_DATE: ${{ github.event.inputs.summary_date }}
+        run: |
+          set -euo pipefail
+
+          ARGS=(
+            --repo "${GITHUB_REPOSITORY}"
+            --output-dir "daily_bundle"
+            --github-output "${GITHUB_OUTPUT}"
+          )
+
+          if [ -n "${SUMMARY_DATE:-}" ]; then
+            ARGS+=(--local-date "${SUMMARY_DATE}")
+          fi
+
+          python scripts/daily_artifact_bundle.py "${ARGS[@]}"
+
+      - name: Send Telegram summary
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TARGET_DATE: ${{ steps.bundle.outputs.target_date }}
+          JSON_COUNT: ${{ steps.bundle.outputs.json_count }}
+          ARTIFACT_COUNT: ${{ steps.bundle.outputs.artifact_count }}
+          WINDOW_START_UTC: ${{ steps.bundle.outputs.window_start_utc }}
+          WINDOW_END_UTC: ${{ steps.bundle.outputs.window_end_utc }}
+          ZIP_PATH: ${{ steps.bundle.outputs.zip_path }}
         run: |
-          if [ -z "$TG_BOT_TOKEN" ] || [ -z "$TG_CHAT_ID" ]; then
+          set -euo pipefail
+
+          if [ -z "${TG_BOT_TOKEN:-}" ] || [ -z "${TG_CHAT_ID:-}" ]; then
             echo "Telegram secrets not set, skipping notification"
             exit 0
           fi
 
-          COUNT=$(( $(find codex -name '*.json' 2>/dev/null | wc -l) + 0 ))
-
-          if [ "$COUNT" -gt 0 ]; then
-            # 打包并发送所有生成的 JSON 文件到TG机器人
-            ZIP_NAME="tokens_$(date +%Y%m%d_%H%M%S).zip"
-            zip -r "$ZIP_NAME" codex/*.json
-            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+          if [ -n "${ZIP_PATH:-}" ] && [ -f "${ZIP_PATH}" ] && [ "${JSON_COUNT:-0}" -gt 0 ]; then
+            CAPTION=$(cat <<EOF
+📦 UTC+8 ${TARGET_DATE} 全量打包
+JSON 数量: ${JSON_COUNT}
+来源 artifacts: ${ARTIFACT_COUNT}
+时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}
+EOF
+)
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
               -F "chat_id=${TG_CHAT_ID}" \
-              -F "document=@$ZIP_NAME" \
-              -F "caption=📦 本次运行产出的账户打包 (共 ${COUNT} 个)" || true
+              -F "document=@${ZIP_PATH}" \
+              -F "caption=${CAPTION}"
           else
-            MSG="🤖 *Daily Task Job*%0A%0A❌ 本次无产出%0A%0ARun: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-            curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${TG_CHAT_ID}" \
-              -d "text=${MSG}" \
-              -d "parse_mode=Markdown" \
-              -d "disable_web_page_preview=true" || true
+            MSG=$(cat <<EOF
+📦 Daily bundle
+日期(UTC+8): ${TARGET_DATE}
+结果: 无可打包产物
+来源 artifacts: ${ARTIFACT_COUNT}
+时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}
+EOF
+)
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT_ID}" \
+              --data-urlencode "text=${MSG}"
           fi
