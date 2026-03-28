@@ -14,8 +14,17 @@ on:
         options:
           - register
           - daily_summary
+      provider:
+        description: 'register 模式下使用的邮箱提供商'
+        required: false
+        default: 'cfmail'
+        type: choice
+        options:
+          - cfmail
+          - yydsmail
+          - tempmail
       count:
-        description: 'register 模式下的注册数量'
+        description: 'register 模式下的成功注册数量'
         required: false
         default: '20'
       summary_date:
@@ -35,12 +44,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      CFMAIL_BASE: ${{ vars.CFMAIL_BASE }}
-      CFMAIL_DOMAINS: ${{ vars.CFMAIL_DOMAINS }}
-      TEMPMAIL_LOL_BASE: ${{ vars.TEMPMAIL_LOL_BASE }}
+      CFMAIL_BASE: ${{ secrets.CFMAIL_BASE }}
+      CFMAIL_DOMAINS: ${{ secrets.CFMAIL_DOMAINS }}
       CFMAIL_CUSTOM_AUTH: ${{ secrets.CFMAIL_CUSTOM_AUTH }}
       CFMAIL_USER_EMAIL: ${{ secrets.CFMAIL_USER_EMAIL }}
       CFMAIL_USER_PASSWORD: ${{ secrets.CFMAIL_USER_PASSWORD }}
+      YYDSMAIL_API_BASE: ${{ secrets.YYDSMAIL_API_BASE }}
+      YYDSMAIL_API_KEY: ${{ secrets.YYDSMAIL_API_KEY }}
+      TEMPMAIL_LOL_BASE: ${{ secrets.TEMPMAIL_LOL_BASE }}
+      REGISTER_PROVIDER_INPUT: ${{ github.event.inputs.provider }}
+      REGISTER_PROVIDER_DEFAULT: ${{ secrets.REGISTER_PROVIDER }}
 
     steps:
       - name: Checkout
@@ -66,16 +79,33 @@ jobs:
         env:
           REG_COUNT: ${{ github.event.inputs.count || '30' }}
         run: |
+          set -euo pipefail
           mkdir -p codex
-          for i in $(seq 1 "$REG_COUNT"); do
-            echo "========== 第 $i/$REG_COUNT 次注册 =========="
-            python scripts/task_runner.py --once || true
-            if [ "$i" -lt "$REG_COUNT" ]; then
-              SLEEP=$((RANDOM % 20 + 30))
-              echo "[*] 为避免风控，等待 ${SLEEP}s..."
-              sleep "$SLEEP"
-            fi
-          done
+
+          PROVIDER="${REGISTER_PROVIDER_INPUT:-}"
+          if [ -z "$PROVIDER" ]; then
+            PROVIDER="${REGISTER_PROVIDER_DEFAULT:-cfmail}"
+          fi
+
+          case "$PROVIDER" in
+            cfmail)
+              RUNNER="scripts/task_runner_cfmail.py"
+              ;;
+            yydsmail)
+              RUNNER="scripts/task_runner_yydsmail.py"
+              ;;
+            tempmail)
+              RUNNER="scripts/task_runner_tempmail.py"
+              ;;
+            *)
+              echo "Unknown register provider: $PROVIDER"
+              exit 1
+              ;;
+          esac
+
+          echo "[*] 使用邮箱提供商: $PROVIDER"
+          echo "[*] 目标成功注册数量: $REG_COUNT"
+          python "$RUNNER" --target-successes "$REG_COUNT"
 
       - name: Upload tokens artifact
         if: always()
@@ -141,9 +171,27 @@ jobs:
           fi
 
           if [ -n "${ZIP_PATH:-}" ] && [ -f "${ZIP_PATH}" ] && [ "${JSON_COUNT:-0}" -gt 0 ]; then
-            CAPTION=$(printf '%s\n'               "📦 UTC+8 ${TARGET_DATE} 全量打包"               "JSON 数量: ${JSON_COUNT}"               "来源 artifacts: ${ARTIFACT_COUNT}"               "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}")
-            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"               -F "chat_id=${TG_CHAT_ID}"               -F "document=@${ZIP_PATH}"               -F "caption=${CAPTION}"
+            CAPTION=$(
+              printf '%s\n' \
+                "📦 UTC+8 ${TARGET_DATE} 全量打包" \
+                "JSON 数量: ${JSON_COUNT}" \
+                "来源 artifacts: ${ARTIFACT_COUNT}" \
+                "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}"
+            )
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+              -F "chat_id=${TG_CHAT_ID}" \
+              -F "document=@${ZIP_PATH}" \
+              -F "caption=${CAPTION}"
           else
-            MSG=$(printf '%s\n'               "📦 Daily bundle"               "日期(UTC+8): ${TARGET_DATE}"               "结果: 无可打包产物"               "来源 artifacts: ${ARTIFACT_COUNT}"               "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}")
-            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage"               --data-urlencode "chat_id=${TG_CHAT_ID}"               --data-urlencode "text=${MSG}"
+            MSG=$(
+              printf '%s\n' \
+                "📦 Daily bundle" \
+                "日期(UTC+8): ${TARGET_DATE}" \
+                "结果: 无可打包产物" \
+                "来源 artifacts: ${ARTIFACT_COUNT}" \
+                "时间窗口(UTC): ${WINDOW_START_UTC} ~ ${WINDOW_END_UTC}"
+            )
+            curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TG_CHAT_ID}" \
+              --data-urlencode "text=${MSG}"
           fi
